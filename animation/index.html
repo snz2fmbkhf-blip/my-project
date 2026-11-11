@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>动脉血压的神经体液调节</title>
+<!--
+  第 2–5 幕代码动画（片内时间 12–81s），旁白以字幕呈现。
+  用法：浏览器直接打开本文件。空格 播放/暂停，← → 快退/快进 5 秒。
+  URL 参数：?t=30 跳到第 30 秒；?play 打开即播放；?clean 隐藏控制条（录屏用）。
+  画面完全由时间 t 决定（render(t) 无内部状态），任意时刻拖动结果一致。
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #e8eef7;
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Zen Hei", sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #stage { position: relative; width: min(100vw, calc((100vh - 56px) * 16 / 9)); aspect-ratio: 16 / 9; cursor: pointer; }
+  body.clean #stage { width: min(100vw, calc(100vh * 16 / 9)); }
+  #stage svg { width: 100%; height: 100%; display: block; }
+  #bar { width: min(100vw, calc((100vh - 56px) * 16 / 9)); height: 56px; display: flex; align-items: center;
+    gap: 12px; padding: 0 12px; box-sizing: border-box; font-size: 14px; }
+  body.clean #bar { display: none; }
+  #bar button { background: #1d2b45; color: #e8eef7; border: 1px solid #33476b; border-radius: 6px;
+    padding: 6px 10px; font: inherit; cursor: pointer; white-space: nowrap; }
+  #bar button:hover { background: #26395c; }
+  #seek { flex: 1; min-width: 60px; accent-color: #ff5c74; }
+  #time { font-variant-numeric: tabular-nums; color: #8394ad; white-space: nowrap; }
+  #acts { display: flex; gap: 6px; }
+  @media (max-width: 720px) { #acts { display: none; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <svg viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="7" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <radialGradient id="bgGrad" cx="50%" cy="40%" r="75%">
+          <stop offset="0" stop-color="#14233d"/><stop offset="1" stop-color="#0a1120"/>
+        </radialGradient>
+        <marker id="arrowHead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#e8eef7"/>
+        </marker>
+      </defs>
+      <rect width="1920" height="1080" fill="url(#bgGrad)"/>
+      <g id="scene"></g>
+      <g id="subs"></g>
+      <g id="overlay"></g>
+    </svg>
+  </div>
+  <div id="bar">
+    <button id="playBtn">▶ 播放</button>
+    <div id="acts"></div>
+    <input id="seek" type="range" min="12" max="81" step="0.01" value="12">
+    <span id="time">00:12 / 01:21</span>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------- 基础工具
+const C = {
+  text: '#e8eef7', dim: '#8394ad', faint: '#3a4a66', panel: '#13203a', panelLine: '#263a5c',
+  neural: '#4da3ff', humoral: '#ffa24c', ctrl: '#7fd9a0', bp: '#ff5c74', hr: '#c49bff',
+  accent: '#5fe0c8', nerveLine: '#ffd166', rabbit: '#dfe5ee', rabbitLine: '#9aa8bd',
+};
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const prog = (t, a, b) => ease(clamp((t - a) / (b - a)));
+const back = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const r1 = n => Math.round(n * 10) / 10;
+const r2 = n => Math.round(n * 100) / 100;
+
+// 弹出动画：返回透明度与缩放
+function pop(t, t0, d = 0.45) {
+  const k = clamp((t - t0) / d);
+  return { op: clamp(k * 1.8), s: t < t0 ? 0.8 : 0.8 + 0.2 * back(k) };
+}
+// 在区间 [a, b) 内为 1，两端各 fd 秒渐变
+function windowOp(t, a, b, fd = 0.25) { return clamp((t - a) / fd) * clamp((b - t) / fd); }
+
+function scaleAbout(cx, cy, s) { return `translate(${r1(cx)} ${r1(cy)}) scale(${r2(s)}) translate(${r1(-cx)} ${r1(-cy)})`; }
+function grp(inner, { op = 1, transform = '', filter = '' } = {}) {
+  if (op <= 0.001) return '';
+  return `<g opacity="${r2(op)}"${transform ? ` transform="${transform}"` : ''}${filter ? ` filter="${filter}"` : ''}>${inner}</g>`;
+}
+function txt(x, y, s, { size = 32, fill = C.text, anchor = 'middle', weight = 400, op = 1 } = {}) {
+  return `<text x="${r1(x)}" y="${r1(y)}" font-size="${size}" fill="${fill}" text-anchor="${anchor}" font-weight="${weight}" opacity="${r2(op)}" dominant-baseline="central">${s}</text>`;
+}
+function rrect(x, y, w, h, { fill = 'none', stroke = 'none', sw = 2, rx = 14, op = 1, dash = '' } = {}) {
+  return `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(w)}" height="${r1(h)}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" opacity="${r2(op)}"${dash ? ` stroke-dasharray="${dash}"` : ''}/>`;
+}
+function line(x1, y1, x2, y2, { stroke = C.dim, sw = 2, op = 1, dash = '', marker = '' } = {}) {
+  return `<line x1="${r1(x1)}" y1="${r1(y1)}" x2="${r1(x2)}" y2="${r1(y2)}" stroke="${stroke}" stroke-width="${sw}" opacity="${r2(op)}"${dash ? ` stroke-dasharray="${dash}"` : ''}${marker ? ` marker-end="url(#${marker})"` : ''} stroke-linecap="round"/>`;
+}
+function path(d, { stroke = C.dim, sw = 2, fill = 'none', op = 1, dash = '' } = {}) {
+  return `<path d="${d}" stroke="${stroke}" stroke-width="${sw}" fill="${fill}" opacity="${r2(op)}"${dash ? ` stroke-dasharray="${dash}"` : ''} stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+function poly(pts, opts) { return path('M' + pts.map(p => `${r1(p[0])} ${r1(p[1])}`).join(' L'), opts); }
+// 估算文字宽度（中文 1em，ASCII 约 0.56em）
+const textW = (s, size) => [...s].reduce((w, ch) => w + (/[\x00-\xff]/.test(ch) ? 0.56 : 1) * size, 0);
+
+// 带状态的方框节点：hidden / active（实心发光）/ done（描边）
+function node(cx, cy, w, h, label, color, state, { size = 30, op = 1, s = 1, sub = '' } = {}) {
+  const active = state === 'active';
+  const fill = active ? color : C.panel;
+  const tc = active ? '#0b1220' : (state === 'done' ? color : C.text);
+  let inner = rrect(cx - w / 2, cy - h / 2, w, h, { fill, stroke: color, sw: active ? 3 : 2 });
+  inner += txt(cx, sub ? cy - 10 : cy, label, { size, fill: tc, weight: active ? 700 : 500 });
+  if (sub) inner += txt(cx, cy + 20, sub, { size: 20, fill: active ? '#0b1220' : C.dim });
+  return grp(inner, { op, transform: scaleAbout(cx, cy, s * (active ? 1.05 : 1)), filter: active ? 'url(#glow)' : '' });
+}
+
+// ---------------------------------------------------------------- 旁白与字幕时间轴
+// 每幕旁白按短句切分；在幕内按字数比例分配时长，关键词时刻 = 该字在朗读节奏中的位置。
+// 画面上的高亮全部锚定到 kw()，因此“说到哪里，亮到哪里”。
+const ACTS = [
+  { n: 2, title: '为什么重要', start: 12, end: 24, tail: 0.5, cues: [
+    '动脉血压不是靠某一个器官死守，',
+    '而是神经和体液两套系统时刻在调。',
+    '看懂这套调节，',
+    '就看懂了身体最基本的一种平衡。'] },
+  { n: 3, title: '实验怎么设计', start: 24, end: 48, tail: 0.5, cues: [
+    '我们用家兔，',
+    '直接测它的动脉血压。',
+    '方法是自身前后对照：',
+    '先记一段正常血压当基线，',
+    '再一项项加刺激，',
+    '每项都和它自己的基线比。',
+    '神经这边，',
+    '夹闭颈动脉、刺激减压神经和迷走神经；',
+    '体液这边，',
+    '依次注射肾上腺素、去甲肾上腺素、乙酰胆碱。',
+    '还注射一次生理盐水，',
+    '排除注射动作本身的影响。'] },
+  { n: 4, title: '流程时间线', start: 48, end: 66, tail: 1.6, cues: [
+    '整个流程这样推进：',
+    '准备仪器、麻醉、',
+    '手术暴露血管和神经，',
+    '记录基线，',
+    '然后神经、体液两组刺激逐项进行，',
+    '每做完一项，',
+    '等血压回到基线再做下一项。'] },
+  { n: 5, title: '怎么测量、判断', start: 66, end: 81, tail: 1.4, cues: [
+    '我们盯住四个数：',
+    '收缩压、舒张压、平均动脉压、心率。',
+    '每项处理前后对比，',
+    '看血压升还是降、',
+    '心率快还是慢，',
+    '再用统计检验判断差异是否可靠。'] },
+];
+const T0 = 12, T1 = 81, LEAD = 0.6, PAUSE = 1.6; // PAUSE：句间停顿，按“字”计
+
+for (const a of ACTS) {
+  const w = a.cues.map(s => s.length + PAUSE);
+  const W = w.reduce((x, y) => x + y, 0);
+  const s0 = a.start + LEAD, span = a.end - a.tail - s0;
+  let acc = 0;
+  a.cueTimes = a.cues.map((text, i) => {
+    const start = s0 + (acc / W) * span; acc += w[i];
+    return { text, start, end: s0 + (acc / W) * span };
+  });
+  a.narrEnd = s0 + span;
+}
+const actOf = n => ACTS.find(a => a.n === n);
+// 关键词 word 中第 off 个字被“说出”的时刻
+function kw(a, word, off = 0) {
+  for (const c of a.cueTimes) {
+    const i = c.text.indexOf(word);
+    if (i >= 0) return c.start + ((i + off) / (c.text.length + PAUSE)) * (c.end - c.start);
+  }
+  throw new Error(`关键词未找到：第 ${a.n} 幕「${word}」`);
+}
+function cueAt(t) {
+  for (const a of ACTS) for (const c of a.cueTimes) if (t >= c.start && t < c.end) return c;
+  return null;
+}
+
+// ---------------------------------------------------------------- 共用：动脉血压波形
+// 归一化单个心动周期（0 = 舒张压，1 = 收缩压），含重搏切迹
+function pulse(ph) {
+  if (ph < 0.12) return Math.sin((ph / 0.12) * Math.PI / 2);
+  if (ph < 0.34) return 1 - 0.42 * ease((ph - 0.12) / 0.22);
+  if (ph < 0.38) return 0.58 - 0.08 * Math.sin(((ph - 0.34) / 0.04) * Math.PI / 2);
+  if (ph < 0.44) return 0.5 + 0.07 * Math.sin(((ph - 0.38) / 0.06) * Math.PI / 2);
+  return 0.57 * Math.pow(1 - (ph - 0.44) / 0.56, 1.6);
+}
+const frac = x => x - Math.floor(x);
+// 滚动波形：右端为“当前时刻”，向左为过去
+function scrollingWave(t, xL, xR, yOf, { speed = 260, hz = 1.3, sys = 120, dia = 78, step = 5 } = {}) {
+  const pts = [];
+  for (let x = xL; x <= xR; x += step) {
+    const tau = t - (xR - x) / speed;
+    pts.push([x, yOf(dia + (sys - dia) * pulse(frac(tau * hz)))]);
+  }
+  return pts;
+}
+
+// ---------------------------------------------------------------- 第 2 幕 · 为什么重要
+const A2 = actOf(2);
+const K2 = {
+  curve: A2.start + 0.1,
+  neural: kw(A2, '神经'), humoral: kw(A2, '体液'),
+  regulate: kw(A2, '这套调节'), balance: kw(A2, '平衡'),
+};
+function drawAct2(t) {
+  const xL = 240, xR = 1680, yOf = p => 620 - (p - 96) * 5;  // 波形均值 ≈ 96 mmHg
+  let out = '';
+
+  // 平均动脉压参考线 + 稳态带
+  const band = prog(t, K2.regulate, K2.regulate + 1.2);
+  out += rrect(xL, yOf(104), xR - xL, yOf(88) - yOf(104), { fill: C.accent, rx: 8, op: 0.10 * band });
+  out += line(xL, yOf(96), xR, yOf(96), { stroke: C.dim, sw: 2, dash: '10 10', op: 0.6 * prog(t, K2.curve, K2.curve + 1) });
+  out += txt(xR + 16, yOf(96), '平均动脉压', { size: 24, fill: C.dim, anchor: 'start', op: prog(t, K2.curve + 0.6, K2.curve + 1.4) });
+  out += txt(xR + 16, yOf(96) + 36, '稳定区间', { size: 22, fill: C.accent, anchor: 'start', op: band });
+
+  // 滚动血压曲线（从左向右揭开）
+  const reveal = lerp(xL, xR, prog(t, K2.curve, K2.curve + 1.6));
+  const pts = scrollingWave(t, xL, xR, yOf).filter(p => p[0] <= reveal);
+  if (pts.length > 1) {
+    out += poly(pts, { stroke: C.bp, sw: 5 });
+    const h = pts[pts.length - 1];
+    out += `<circle cx="${r1(h[0])}" cy="${r1(h[1])}" r="9" fill="${C.bp}" filter="url(#glow)"/>`;
+  }
+  out += txt(xL, yOf(132), '动脉血压', { size: 28, fill: C.bp, anchor: 'start', weight: 600, op: prog(t, K2.curve + 0.4, K2.curve + 1.2) });
+
+  // 两个调节系统：标签从两侧飞入，粒子流汇入曲线
+  const sides = [
+    { key: 'neural', label: '神经', sub: '快 · 反射性调节', color: C.neural, from: -260, to: 470, sink: [800, yOf(96)], ctrl: [500, yOf(84)] },
+    { key: 'humoral', label: '体液', sub: '慢 · 持久性调节', color: C.humoral, from: 2180, to: 1450, sink: [1120, yOf(96)], ctrl: [1420, yOf(84)] },
+  ];
+  for (const sd of sides) {
+    const t0 = K2[sd.key], k = prog(t, t0, t0 + 1.1);
+    if (t < t0) continue;
+    const x = lerp(sd.from, sd.to, k), y = 270;
+    // 粒子流
+    const streamOp = prog(t, t0 + 0.8, t0 + 1.5);
+    if (streamOp > 0) {
+      const [sx, sy] = sd.sink, [cx, cy] = sd.ctrl, y0 = y + 48;
+      out += path(`M${sd.to} ${y0} Q${cx} ${cy} ${sx} ${sy}`, { stroke: sd.color, sw: 2, op: 0.35 * streamOp, dash: '4 10' });
+      for (let i = 0; i < 7; i++) {
+        const u = frac(t * 0.55 + i / 7), v = 1 - u;
+        const px = v * v * sd.to + 2 * v * u * cx + u * u * sx;
+        const py = v * v * y0 + 2 * v * u * cy + u * u * sy;
+        out += `<circle cx="${r1(px)}" cy="${r1(py)}" r="7" fill="${sd.color}" opacity="${r2(streamOp * Math.sin(u * Math.PI))}"/>`;
+      }
+      const pulseR = 14 + 6 * Math.sin(t * 6);
+      out += `<circle cx="${r1(sx)}" cy="${r1(sy)}" r="${r1(pulseR)}" fill="none" stroke="${sd.color}" stroke-width="3" opacity="${r2(0.8 * streamOp)}" filter="url(#glow)"/>`;
+    }
+    let tag = rrect(x - 110, y - 46, 220, 92, { fill: sd.color, rx: 46, op: 0.18 });
+    tag += rrect(x - 110, y - 46, 220, 92, { stroke: sd.color, sw: 3, rx: 46 });
+    tag += txt(x, y, sd.label, { size: 48, fill: sd.color, weight: 700 });
+    tag += txt(x, y + 82, sd.sub, { size: 24, fill: C.dim, op: prog(t, t0 + 1.0, t0 + 1.6) });
+    out += grp(tag, { filter: 'url(#glow)' });
+  }
+
+  // 收束：神经 + 体液 → 稳态
+  const fin = pop(t, K2.balance - 0.2, 0.6);
+  if (t >= K2.balance - 0.2) {
+    out += grp(
+      txt(960, 150, `<tspan fill="${C.neural}">神经</tspan> + <tspan fill="${C.humoral}">体液</tspan> → 血压动态平衡`, { size: 44, weight: 700 }),
+      { op: fin.op, transform: scaleAbout(960, 150, fin.s) });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- 第 3 幕 · 实验怎么设计
+const A3 = actOf(3);
+const K3 = {
+  rabbit: A3.cueTimes[0].start, measure: kw(A3, '动脉血压'),
+  self: kw(A3, '自身前后对照'), base: kw(A3, '基线'), stim: kw(A3, '加刺激'), compare: kw(A3, '自己的基线'),
+  neural: kw(A3, '神经这边'), clamp: kw(A3, '夹闭颈动脉'), depr: kw(A3, '减压神经'), vagus: kw(A3, '迷走神经'),
+  humoral: kw(A3, '体液这边'), adr: kw(A3, '肾上腺素'), ne: kw(A3, '去甲肾上腺素'), ach: kw(A3, '乙酰胆碱'),
+  saline: kw(A3, '生理盐水'), exclude: kw(A3, '排除'),
+};
+const TREE = {
+  groups: [
+    { key: 'neural', label: '神经调节', color: C.neural, x: 1050, t: K3.neural },
+    { key: 'humoral', label: '体液调节', color: C.humoral, x: 1380, t: K3.humoral },
+    { key: 'ctrl', label: '注射对照', color: C.ctrl, x: 1700, t: K3.saline },
+  ],
+  leaves: [
+    { g: 'neural', label: '夹闭颈动脉', t: K3.clamp, end: K3.depr, site: 'clamp' },
+    { g: 'neural', label: '刺激减压神经', t: K3.depr, end: K3.vagus, site: 'nerve', tag: '减压神经' },
+    { g: 'neural', label: '刺激迷走神经', t: K3.vagus, end: K3.humoral, site: 'nerve', tag: '迷走神经' },
+    { g: 'humoral', label: '肾上腺素', t: K3.adr, end: K3.ne, site: 'ear' },
+    { g: 'humoral', label: '去甲肾上腺素', t: K3.ne, end: K3.ach, site: 'ear' },
+    { g: 'humoral', label: '乙酰胆碱', t: K3.ach, end: K3.saline, site: 'ear' },
+    { g: 'ctrl', label: '生理盐水', t: K3.saline, end: A3.end + 1, site: 'ear' },
+  ],
+};
+const stateAt = (t, a, b) => (t < a ? 'hidden' : t < b ? 'active' : 'done');
+
+function drawRabbit(t) {
+  let o = '';
+  const R = { fill: C.rabbit, stroke: C.rabbitLine, sw: 3 };
+  const el = (cx, cy, rx, ry, rot = 0, f = R.fill) =>
+    `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" transform="rotate(${rot} ${cx} ${cy})" fill="${f}" stroke="${R.stroke}" stroke-width="${R.sw}"/>`;
+  o += el(250, 630, 105, 26);                 // 后脚
+  o += el(140, 470, 30, 30);                  // 尾
+  o += el(330, 500, 200, 125);                // 躯干
+  o += el(225, 520, 105, 92);                 // 后腿
+  o += el(520, 625, 50, 18);                  // 前脚
+  o += el(522, 262, 24, 84, -18);             // 耳
+  o += el(580, 252, 24, 86, 8);
+  o += el(525, 262, 10, 60, -18, '#f2c4cf');
+  o += el(582, 252, 10, 62, 8, '#f2c4cf');
+  o += el(565, 390, 82, 76);                  // 头
+  o += `<circle cx="595" cy="372" r="10" fill="#1b2433"/><circle cx="598" cy="368" r="3" fill="#fff"/>`;
+  o += `<circle cx="641" cy="402" r="8" fill="#e98fa3"/>`;
+  return o;
+}
+
+function drawAct3(t) {
+  let out = '';
+  // ---- 左：家兔示意 + 血压测量
+  const rp = pop(t, K3.rabbit, 0.6);
+  let left = rrect(70, 150, 760, 690, { fill: C.panel, stroke: C.panelLine, rx: 20 });
+  left += txt(100, 190, '实验对象：家兔', { size: 26, fill: C.dim, anchor: 'start' });
+  left += drawRabbit(t);
+
+  // 颈总动脉（红）与神经（黄）
+  const art = 'M470 560 C490 510 515 478 540 448';
+  const nerve = 'M492 570 C512 522 537 490 562 460';
+  const mOp = prog(t, K3.measure, K3.measure + 0.8);
+  left += path(art, { stroke: C.bp, sw: 8, op: 0.35 + 0.65 * mOp });
+  left += path(nerve, { stroke: C.nerveLine, sw: 4, op: 0.25 + 0.75 * prog(t, K3.neural, K3.neural + 0.6) });
+
+  // 插管 → 换能器 → 监护屏
+  const tubeLen = 330;
+  left += `<path d="M498 505 C560 520 640 560 640 650" stroke="#9fb3c8" stroke-width="5" fill="none" stroke-dasharray="${tubeLen}" stroke-dashoffset="${r1(tubeLen * (1 - mOp))}" stroke-linecap="round"/>`;
+  left += txt(660, 560, '颈总动脉插管', { size: 22, fill: C.dim, anchor: 'start', op: mOp });
+  if (mOp > 0) {
+    let mon = rrect(450, 650, 360, 160, { fill: '#08101e', stroke: C.panelLine, rx: 12 });
+    mon += txt(470, 676, '动脉血压', { size: 20, fill: C.bp, anchor: 'start' });
+    mon += txt(790, 676, '实时记录', { size: 18, fill: C.dim, anchor: 'end' });
+    mon += poly(scrollingWave(t, 470, 790, p => 790 - (p - 70) * 1.6, { speed: 160, step: 4 }), { stroke: C.bp, sw: 3 });
+    left += grp(mon, { op: mOp });
+  }
+
+  // 当前刺激在家兔身上的位置
+  for (const lf of TREE.leaves) {
+    const w = windowOp(t, lf.t, lf.end);
+    if (w <= 0) continue;
+    const color = TREE.groups.find(g => g.key === lf.g).color;
+    let s = '';
+    if (lf.site === 'clamp') {
+      s += line(458, 538, 500, 556, { stroke: color, sw: 9 });
+      s += line(452, 552, 494, 570, { stroke: color, sw: 9 });
+      s += line(470, 560, 300, 730, { stroke: color, sw: 2, dash: '6 6' });
+      s += txt(270, 750, '夹闭', { size: 30, fill: color, weight: 700 });
+    } else if (lf.site === 'nerve') {
+      const z = 'M545 520 l18 -10 l-8 18 l18 -10';
+      s += path(z, { stroke: color, sw: 5 });
+      s += `<circle cx="530" cy="512" r="9" fill="${color}"/>`;
+      s += line(525, 520, 300, 730, { stroke: color, sw: 2, dash: '6 6' });
+      s += txt(270, 750, '电刺激 · ' + lf.tag, { size: 30, fill: color, weight: 700 });
+    } else {
+      // 耳缘静脉注射
+      s += `<g transform="rotate(-35 690 230)">${rrect(640, 218, 100, 24, { fill: '#cfe3ff', stroke: color, sw: 3, rx: 5 })}`;
+      s += rrect(740, 224, 26, 12, { fill: color, rx: 3 }) + line(640, 230, 600, 230, { stroke: '#cfe3ff', sw: 3 }) + `</g>`;
+      s += txt(690, 300, '耳缘静脉', { size: 20, fill: C.dim });
+      s += txt(720, 180, lf.label, { size: 28, fill: color, weight: 700 });
+    }
+    left += grp(s, { op: w, filter: 'url(#glow)' });
+  }
+  out += grp(left, { op: rp.op, transform: scaleAbout(450, 495, lf3Scale(rp.s)) });
+
+  // ---- 右：分组 / 变量树
+  const rootP = pop(t, K3.self);
+  if (t >= K3.self) out += node(1340, 200, 330, 76, '自身前后对照', C.accent, t < K3.base ? 'active' : 'done', { size: 34, op: rootP.op, s: rootP.s });
+  const varP = pop(t, K3.stim);
+  if (t >= K3.stim) {
+    out += grp(rrect(905, 176, 240, 48, { stroke: C.dim, sw: 1.5, rx: 24, dash: '5 5' }) + txt(1025, 200, '自变量：处理因素', { size: 22, fill: C.dim }), { op: varP.op });
+    out += grp(rrect(1530, 176, 290, 48, { stroke: C.dim, sw: 1.5, rx: 24, dash: '5 5' }) + txt(1675, 200, '因变量：血压 · 心率', { size: 22, fill: C.dim }), { op: varP.op });
+  }
+  const baseP = pop(t, K3.base);
+  if (t >= K3.base) {
+    out += line(1340, 238, 1340, 290, { stroke: C.dim, op: baseP.op });
+    out += node(1340, 322, 360, 64, '基线：正常血压', C.text, stateAt(t, K3.base, K3.stim), { size: 30, op: baseP.op, s: baseP.s });
+  }
+
+  // 前后对照示意（在分组出现前占据下方空白）
+  const cmpOp = windowOp(t, K3.stim, K3.neural, 0.4);
+  if (cmpOp > 0) {
+    let c = '';
+    const yb = 600, x0 = 1020, xs = 1290, x1 = 1700;
+    const rev = lerp(x0, x1, prog(t, K3.stim, K3.stim + 1.6));
+    const pts = [];
+    for (let x = x0; x <= rev; x += 4) {
+      const u = clamp((x - xs) / 140);
+      pts.push([x, yb - 110 * ease(u) + 3 * Math.sin(x * 0.25)]);
+    }
+    c += line(x0, yb, x1, yb, { stroke: C.dim, dash: '8 8' });
+    if (pts.length > 1) c += poly(pts, { stroke: C.bp, sw: 4 });
+    c += txt((x0 + xs) / 2, yb + 36, '处理前（基线）', { size: 24, fill: C.dim });
+    c += grp(path(`M${xs} ${yb + 60} l-12 20 h24 z`, { fill: C.humoral, stroke: 'none' }) + txt(xs, yb + 104, '加刺激', { size: 24, fill: C.humoral }), { op: prog(t, K3.stim + 0.3, K3.stim + 0.7) });
+    c += txt(1560, yb - 145, '处理后', { size: 24, fill: C.bp, op: prog(t, K3.stim + 1.0, K3.stim + 1.4) });
+    const dOp = prog(t, K3.compare, K3.compare + 0.5);
+    c += grp(line(1640, yb - 6, 1640, yb - 104, { stroke: C.text, sw: 3, marker: 'arrowHead' }) + line(1640, yb - 104, 1640, yb - 6, { stroke: C.text, sw: 3, marker: 'arrowHead' }) +
+      txt(1660, yb - 55, 'Δ', { size: 34, anchor: 'start', weight: 700 }) +
+      txt(1360, 790, '每项都和它自己的基线比', { size: 30, fill: C.accent, weight: 600 }), { op: dOp });
+    out += grp(c, { op: cmpOp });
+  }
+
+  // 三组 + 叶子
+  for (const g of TREE.groups) {
+    if (t < g.t) continue;
+    const p = pop(t, g.t);
+    const leaves = TREE.leaves.filter(l => l.g === g.key);
+    const elbow = `M1340 354 V392 H${g.x} V418`;
+    out += path(elbow, { stroke: g.color, sw: 2.5, op: 0.8 * p.op });
+    out += node(g.x, 450, 250, 64, g.label, g.color, t < leaves[0].t ? 'active' : 'done', { size: 30, op: p.op, s: p.s });
+    leaves.forEach((lf, i) => {
+      if (t < lf.t) return;
+      const lp = pop(t, lf.t), y = 550 + i * 78;
+      out += line(g.x, i === 0 ? 482 : y - 50, g.x, y - 28, { stroke: g.color, sw: 2, op: lp.op });
+      out += node(g.x, y, 250, 56, lf.label, g.color, stateAt(t, lf.t, lf.end), { size: 26, op: lp.op, s: lp.s });
+    });
+  }
+  // 盐水对照的意义
+  const exP = pop(t, K3.exclude);
+  if (t >= K3.exclude) {
+    out += grp(txt(1700, 640, '排除注射动作', { size: 22, fill: C.ctrl }) + txt(1700, 670, '本身的影响', { size: 22, fill: C.ctrl }), { op: exP.op });
+  }
+  return out;
+}
+const lf3Scale = s => 0.94 + 0.06 * ((s - 0.8) / 0.2);
+
+// ---------------------------------------------------------------- 第 4 幕 · 流程时间线
+const A4 = actOf(4);
+const EV = [ // 示意：每项刺激引起的平均动脉压变化（mmHg）
+  { label: '夹闭颈动脉', d: +26, g: 'neural' }, { label: '减压神经', d: -30, g: 'neural' }, { label: '迷走神经', d: -34, g: 'neural' },
+  { label: '肾上腺素', d: +30, g: 'humoral' }, { label: '去甲肾上腺素', d: +40, g: 'humoral' }, { label: '乙酰胆碱', d: -34, g: 'humoral' },
+  { label: '生理盐水', d: +1, g: 'ctrl' },
+];
+const TR = { x0: 220, xb: 440, x1: 1700, yb: 715, k: 2.8 };
+TR.evW = (TR.x1 - TR.xb) / EV.length;
+const K4 = {
+  prep: kw(A4, '准备'), anes: kw(A4, '麻醉'), surg: kw(A4, '手术'), base: kw(A4, '记录基线'),
+  neu: kw(A4, '然后神经', 2), done: kw(A4, '每做完'), back: kw(A4, '回到基线'), end: A4.narrEnd,
+};
+// 记录笔位置：基线段 [base, neu]，刺激段 [neu, end]
+function penX(t) {
+  if (t < K4.base) return TR.x0;
+  if (t < K4.neu) return lerp(TR.x0, TR.xb, (t - K4.base) / (K4.neu - K4.base));
+  return lerp(TR.xb, TR.x1, clamp((t - K4.neu) / (K4.end - K4.neu)));
+}
+const penTime = x => K4.neu + ((x - TR.xb) / (TR.x1 - TR.xb)) * (K4.end - K4.neu);
+const evStart = i => TR.xb + i * TR.evW + 0.08 * TR.evW;
+K4.hum = penTime(evStart(3));
+K4.ana = K4.end + 0.15;
+const STEPS = [
+  { label: '准备', sub: '仪器定标', t: K4.prep, color: C.accent },
+  { label: '麻醉', sub: '耳缘静脉给药', t: K4.anes, color: C.accent },
+  { label: '手术', sub: '暴露血管与神经', t: K4.surg, color: C.accent },
+  { label: '基线', sub: '记录正常血压', t: K4.base, color: C.text },
+  { label: '神经', sub: '3 项刺激', t: K4.neu, color: C.neural },
+  { label: '体液', sub: '3 种药 + 盐水', t: K4.hum, color: C.humoral },
+  { label: '分析', sub: '前后对比 · 统计', t: K4.ana, color: C.hr },
+];
+function evShape(u) {
+  if (u < 0.08) return 0;
+  if (u < 0.3) return ease((u - 0.08) / 0.22);
+  if (u < 0.5) return 1;
+  if (u < 0.84) return 1 - ease((u - 0.5) / 0.34);
+  return 0;
+}
+function mapAt(x) {
+  if (x < TR.xb) return 92;
+  const i = Math.min(EV.length - 1, Math.floor((x - TR.xb) / TR.evW));
+  return 92 + EV[i].d * evShape((x - TR.xb - i * TR.evW) / TR.evW);
+}
+const gColor = g => ({ neural: C.neural, humoral: C.humoral, ctrl: C.ctrl }[g]);
+
+function drawAct4(t) {
+  let out = '';
+  const xs = i => 210 + i * 250, y = 300;
+  // 时间线
+  out += line(xs(0), y, xs(6), y, { stroke: C.faint, sw: 8 });
+  let cur = -1;
+  STEPS.forEach((s, i) => { if (t >= s.t) cur = i; });
+  if (cur >= 0) {
+    const prevX = xs(Math.max(0, cur - 1)), k = prog(t, STEPS[cur].t, STEPS[cur].t + 0.5);
+    out += line(xs(0), y, lerp(prevX, xs(cur), k), y, { stroke: C.accent, sw: 8 });
+  }
+  STEPS.forEach((s, i) => {
+    const x = xs(i), st = i < cur ? 'done' : i === cur ? 'active' : 'todo';
+    const p = st === 'todo' ? { op: 0.55, s: 1 } : pop(t, s.t);
+    let n = '';
+    if (st === 'active') {
+      const ring = 52 + 10 * frac(t * 1.2);
+      n += `<circle cx="${x}" cy="${y}" r="${r1(ring)}" fill="none" stroke="${s.color}" stroke-width="3" opacity="${r2(1 - frac(t * 1.2))}"/>`;
+    }
+    n += `<circle cx="${x}" cy="${y}" r="42" fill="${st === 'todo' ? C.panel : s.color}" stroke="${st === 'todo' ? C.faint : s.color}" stroke-width="4"${st === 'active' ? ' filter="url(#glow)"' : ''}/>`;
+    n += txt(x, y + 1, String(i + 1), { size: 34, weight: 700, fill: st === 'todo' ? C.dim : '#0b1220' });
+    n += txt(x, y + 84, s.label, { size: 36, weight: st === 'active' ? 700 : 500, fill: st === 'todo' ? C.dim : s.color });
+    n += txt(x, y + 128, s.sub, { size: 22, fill: C.dim, op: st === 'todo' ? 0.6 : 1 });
+    out += grp(n, { op: p.op, transform: scaleAbout(x, y, p.s) });
+  });
+  out += txt(960, 170, '7 步实验流程', { size: 30, fill: C.dim, op: prog(t, A4.start + 0.2, A4.start + 0.8) });
+
+  // 血压记录面板：基线 → 逐项刺激 → 回到基线
+  const panelOp = prog(t, K4.base - 0.6, K4.base);
+  if (panelOp > 0) {
+    let p = rrect(160, 480, 1600, 420, { fill: C.panel, stroke: C.panelLine, rx: 18 });
+    p += txt(190, 512, '平均动脉压记录（示意）', { size: 22, fill: C.dim, anchor: 'start' });
+    const glowBase = windowOp(t, K4.done, A4.end + 1, 0.4);
+    p += line(TR.x0, TR.yb, TR.x1, TR.yb, { stroke: glowBase > 0 ? C.accent : C.dim, sw: glowBase > 0 ? 3 : 2, dash: '10 10', op: 0.5 + 0.5 * glowBase });
+    p += txt(TR.x1 + 14, TR.yb, '基线', { size: 22, fill: glowBase > 0 ? C.accent : C.dim, anchor: 'start' });
+    p += line(TR.x0, 850, TR.x1, 850, { stroke: C.faint, sw: 2 });
+    p += txt((TR.x0 + TR.xb) / 2, 560, '基线', { size: 24, fill: C.text });
+    const px = penX(t), pts = [];
+    for (let x = TR.x0; x <= px; x += 3) pts.push([x, TR.yb - (mapAt(x) - 92) * TR.k + 2.5 * Math.sin(x * 0.9)]);
+    if (pts.length > 1) {
+      p += poly(pts, { stroke: C.bp, sw: 4 });
+      const h = pts[pts.length - 1];
+      if (t < K4.end) p += `<circle cx="${r1(h[0])}" cy="${r1(h[1])}" r="8" fill="${C.bp}" filter="url(#glow)"/>`;
+    }
+    EV.forEach((e, i) => {
+      const x = evStart(i), col = gColor(e.g);
+      if (px < x) return;
+      const lp = prog(t, penTime(x), penTime(x) + 0.35);
+      p += grp(path(`M${r1(x)} 856 l-11 20 h22 z`, { fill: col, stroke: 'none' }) +
+        txt(x + TR.evW * 0.3, 560, e.label, { size: 22, fill: col, weight: 600 }), { op: lp });
+      const xr = TR.xb + (i + 0.86) * TR.evW;
+      if (px >= xr) p += txt(xr, TR.yb + 34, '✓', { size: 24, fill: C.accent, weight: 700, op: prog(t, penTime(xr), penTime(xr) + 0.3) });
+    });
+    p += grp(txt(1730, 512, '每项做完 → 等回到基线 → 再做下一项', { size: 24, fill: C.accent, anchor: 'end', weight: 600 }), { op: prog(t, K4.done, K4.done + 0.5) });
+    out += grp(p, { op: panelOp });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- 第 5 幕 · 怎么测量、判断
+const A5 = actOf(5);
+const K5 = {
+  four: kw(A5, '四个数'), sbp: kw(A5, '收缩压'), dbp: kw(A5, '舒张压'), map: kw(A5, '平均动脉压'), hr: kw(A5, '心率'),
+  cmp: kw(A5, '处理前后'), up: kw(A5, '升'), down: kw(A5, '降'), fast: kw(A5, '快'), slow: kw(A5, '慢'),
+  stat: kw(A5, '统计检验'), ok: kw(A5, '可靠'),
+};
+// 示意数据：静脉注射去甲肾上腺素前后（均值 ± 标准差，n = 6）
+const METRICS = [
+  { name: '收缩压', abbr: 'SBP · mmHg', color: C.bp, t: K5.sbp, end: K5.dbp, max: 180, pre: [112, 6], post: [151, 9], sig: '**', arrowT: K5.up },
+  { name: '舒张压', abbr: 'DBP · mmHg', color: C.bp, t: K5.dbp, end: K5.map, max: 180, pre: [80, 5], post: [112, 8], sig: '**', arrowT: K5.up },
+  { name: '平均动脉压', abbr: 'MAP · mmHg', color: C.bp, t: K5.map, end: K5.hr, max: 180, pre: [91, 5], post: [125, 8], sig: '**', arrowT: K5.up },
+  { name: '心率', abbr: 'HR · 次/分', color: C.hr, t: K5.hr, end: K5.cmp, max: 320, pre: [268, 14], post: [232, 16], sig: '*', arrowT: K5.slow },
+];
+function drawAct5(t) {
+  let out = '';
+  const top = 190, bot = 840, base = 780, H = 320;
+  out += grp(txt(960, 132, `例：静脉注射 <tspan fill="${C.humoral}" font-weight="700">去甲肾上腺素</tspan>，处理前 vs 处理后`, { size: 32 }),
+    { op: prog(t, K5.cmp, K5.cmp + 0.5) });
+
+  METRICS.forEach((m, i) => {
+    const cx = 330 + i * 420;
+    if (t < K5.four + i * 0.12) return;
+    const ph = pop(t, K5.four + i * 0.12, 0.4);
+    const named = t >= m.t;
+    const hl = Math.max(windowOp(t, m.t, m.end), i === 3 ? windowOp(t, K5.fast, K5.stat) : windowOp(t, K5.up, K5.fast));
+    let c = rrect(cx - 180, top, 360, bot - top, { fill: C.panel, stroke: named ? m.color : C.panelLine, sw: 2 + 2 * hl, rx: 18, dash: named ? '' : '8 8' });
+    if (hl > 0) c += rrect(cx - 180, top, 360, bot - top, { stroke: m.color, sw: 4, rx: 18, op: hl });
+    if (!named) c += txt(cx, 330, '?', { size: 80, fill: C.faint, weight: 700 });
+    else {
+      const np = pop(t, m.t);
+      c += grp(txt(cx, top + 48, m.name, { size: 38, weight: 700, fill: m.color }) + txt(cx, top + 92, m.abbr, { size: 22, fill: C.dim }),
+        { op: np.op, transform: scaleAbout(cx, top + 60, np.s) });
+    }
+    // 前后柱
+    const bars = [
+      { x: cx - 70, v: m.pre, k: prog(t, K5.cmp, K5.cmp + 0.6), fill: '#5b6b86', lab: '处理前' },
+      { x: cx + 70, v: [lerp(m.pre[0], m.post[0], prog(t, K5.cmp + 0.7, K5.cmp + 1.5)), m.post[1]], k: prog(t, K5.cmp + 0.4, K5.cmp + 0.9), fill: m.color, lab: '处理后' },
+    ];
+    const stat = prog(t, K5.stat, K5.stat + 0.5);
+    for (const b of bars) {
+      if (b.k <= 0) continue;
+      const h = (b.v[0] / m.max) * H * b.k, sd = (b.v[1] / m.max) * H;
+      c += rrect(b.x - 45, base - h, 90, h, { fill: b.fill, rx: 6 });
+      c += txt(b.x, base - h - 22 - sd * stat, String(Math.round(b.v[0])), { size: 26, weight: 600, op: b.k });
+      c += txt(b.x, base + 28, b.lab, { size: 22, fill: C.dim, op: b.k });
+      if (stat > 0) {
+        const y0 = base - h;
+        c += grp(line(b.x, y0 - sd, b.x, y0 + sd, { stroke: C.text, sw: 2.5 }) + line(b.x - 14, y0 - sd, b.x + 14, y0 - sd, { stroke: C.text, sw: 2.5 }) +
+          line(b.x - 14, y0 + sd, b.x + 14, y0 + sd, { stroke: C.text, sw: 2.5 }), { op: stat });
+      }
+    }
+    // 升降箭头
+    if (t >= m.arrowT) {
+      const ap = pop(t, m.arrowT, 0.5), up = m.post[0] > m.pre[0], d = Math.round(m.post[0] - m.pre[0]);
+      c += grp(txt(cx - 30, 335, up ? '↑' : '↓', { size: 56, weight: 700, fill: up ? C.bp : C.hr }) +
+        txt(cx + 10, 338, (up ? '+' : '') + d, { size: 30, weight: 700, fill: up ? C.bp : C.hr, anchor: 'start' }),
+        { op: ap.op, transform: scaleAbout(cx, 335, ap.s), filter: 'url(#glow)' });
+    }
+    // 显著性标记
+    if (stat > 0) {
+      const yTop = base - (Math.max(m.pre[0] + m.pre[1], m.post[0] + m.post[1]) / m.max) * H - 62;
+      c += grp(path(`M${cx - 70} ${r1(yTop + 14)} V${r1(yTop)} H${cx + 70} V${r1(yTop + 14)}`, { stroke: C.text, sw: 2.5 }) +
+        txt(cx, yTop - 16, m.sig, { size: 34, weight: 700 }), { op: stat });
+    }
+    out += grp(c, { op: ph.op, transform: scaleAbout(cx, (top + bot) / 2, ph.s) });
+  });
+
+  const okP = pop(t, K5.ok, 0.5);
+  if (t >= K5.stat) {
+    out += grp(rrect(560, 862, 800, 56, { fill: '#0b1220', stroke: C.accent, rx: 28 }) +
+      txt(960, 890, `配对 t 检验（自身前后对照）  * P&lt;0.05   ** P&lt;0.01`, { size: 24, fill: C.text }),
+      { op: prog(t, K5.stat, K5.stat + 0.5) });
+  }
+  if (t >= K5.ok) out += grp(txt(1390, 890, '→ 差异可靠 ✓', { size: 28, fill: C.accent, weight: 700, anchor: 'start' }), { op: okP.op });
+  out += txt(1860, 1062, '示意数据，非实测', { size: 18, fill: C.dim, anchor: 'end', op: prog(t, K5.cmp, K5.cmp + 0.5) });
+  return out;
+}
+
+// ---------------------------------------------------------------- 画面装配
+const DRAW = { 2: drawAct2, 3: drawAct3, 4: drawAct4, 5: drawAct5 };
+function chrome(a, t) {
+  let o = rrect(70, 40, 128, 50, { fill: a.n === 3 ? C.bp : '#22324f', rx: 25 });
+  o += txt(134, 65, `第 ${a.n} 幕`, { size: 26, weight: 700 });
+  o += txt(218, 65, a.title, { size: 34, weight: 600, anchor: 'start' });
+  ACTS.forEach((b, i) => {
+    const x = 1460 + i * 100, k = clamp((t - b.start) / (b.end - b.start));
+    o += rrect(x, 60, 88, 8, { fill: C.faint, rx: 4 });
+    if (k > 0) o += rrect(x, 60, 88 * k, 8, { fill: b === a ? C.accent : '#4f6b8f', rx: 4 });
+  });
+  return o;
+}
+function render(t) {
+  let scene = '';
+  ACTS.forEach((a, i) => {
+    if (t < a.start || t > a.end) return;
+    const last = i === ACTS.length - 1;
+    const op = prog(t, a.start, a.start + 0.45) * (last ? 1 : 1 - prog(t, a.end - 0.35, a.end));
+    scene += grp(chrome(a, t) + DRAW[a.n](t), { op });
+  });
+  document.getElementById('scene').innerHTML = scene;
+
+  const c = cueAt(t);
+  let subs = '';
+  if (c) {
+    const s = c.text.replace(/[，。；：、]$/, '');
+    const w = textW(s, 44) + 72, op = clamp((t - c.start) / 0.12) * clamp((c.end - t) / 0.1);
+    subs = grp(rrect(960 - w / 2, 958, w, 76, { fill: '#000', rx: 12, op: 0.62 }) + txt(960, 997, s, { size: 44, weight: 500 }), { op });
+  }
+  document.getElementById('subs').innerHTML = subs;
+}
+
+// ---------------------------------------------------------------- 播放控制
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+let t = clamp(parseFloat(params.get('t')) || T0, T0, T1), playing = false, last = null, dirty = true;
+if (params.has('clean')) document.body.classList.add('clean');
+
+const fmt = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function seek(nt) { t = clamp(nt, T0, T1); dirty = true; }
+function setPlaying(p) {
+  if (p && t >= T1) t = T0;
+  playing = p; last = null; dirty = true;
+  $('playBtn').textContent = playing ? '❚❚ 暂停' : '▶ 播放';
+}
+function overlay() {
+  if (playing || t > T0 + 0.01) return '';
+  return `<circle cx="960" cy="520" r="90" fill="#000" opacity="0.5"/><path d="M930 470 L1010 520 L930 570 z" fill="${C.text}"/>` +
+    txt(960, 660, '动脉血压的神经体液调节 · 第 2–5 幕', { size: 34, fill: C.dim });
+}
+function frame(now) {
+  if (playing) {
+    if (last !== null) t += (now - last) / 1000;
+    last = now;
+    if (t >= T1) { t = T1; setPlaying(false); }
+    dirty = true;
+  }
+  if (dirty) {
+    render(t);
+    $('overlay').innerHTML = overlay();
+    $('seek').value = t;
+    $('time').textContent = `${fmt(t)} / ${fmt(T1)}`;
+    dirty = false;
+  }
+  requestAnimationFrame(frame);
+}
+
+ACTS.forEach(a => {
+  const b = document.createElement('button');
+  b.textContent = `第${a.n}幕`;
+  b.title = a.title;
+  b.onclick = () => seek(a.start + 0.5);
+  $('acts').appendChild(b);
+});
+$('playBtn').onclick = () => setPlaying(!playing);
+$('stage').onclick = () => setPlaying(!playing);
+$('seek').oninput = e => { seek(parseFloat(e.target.value)); last = null; };
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+  else if (e.code === 'ArrowRight') { seek(t + 5); last = null; }
+  else if (e.code === 'ArrowLeft') { seek(t - 5); last = null; }
+});
+
+// 供自动化验证使用
+window.anim = { seek: nt => { seek(nt); render(t); $('overlay').innerHTML = ''; }, cueAt, ACTS, T0, T1,
+  anchors: { act2: K2, act3: K3, act4: K4, act5: K5 } };
+
+if (params.has('play')) setPlaying(true);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
