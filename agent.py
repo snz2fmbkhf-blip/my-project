@@ -17,7 +17,8 @@ SYSTEM = "你是一个友好、简洁的中文助手。"
 def chat_turn(client, history, user_input, write=sys.stdout.write):
     """发送一轮对话并流式输出回复，成功后把这一轮追加进 history。
 
-    返回最终消息；被模型拒答时返回 None。出错或拒答时 history 保持不变。
+    返回最终消息；被模型拒答时返回 None。出错、拒答或回复内容为空时 history 保持不变
+    （空的 assistant content 回传给 API 会导致后续每一轮请求都失败）。
     """
     history.append({"role": "user", "content": user_input})
     try:
@@ -41,6 +42,9 @@ def chat_turn(client, history, user_input, write=sys.stdout.write):
     if message.stop_reason == "refusal":
         history.pop()
         return None
+    if not message.content:
+        history.pop()
+        return message
     # 原样回传 content（含 thinking 块），保证下一轮请求合法
     history.append({"role": "assistant", "content": message.content})
     return message
@@ -68,8 +72,11 @@ def main():
 
         print("AI: ", end="", flush=True)
         try:
-            if chat_turn(client, history, user_input) is None:
+            message = chat_turn(client, history, user_input)
+            if message is None:
                 print("\n（这个问题模型拒绝回答，换个问法试试。）")
+            elif not message.content:
+                print("\n（模型没有返回内容，请重试。）")
             else:
                 print()
         except anthropic.AuthenticationError:
@@ -81,6 +88,8 @@ def main():
             print(f"\n请求失败（{e.status_code}）：{e.message}")
         except anthropic.APIConnectionError:
             print("\n网络连接失败，请检查网络。")
+        except anthropic.APIError as e:
+            print(f"\n请求出错：{e}")
         except KeyboardInterrupt:
             print("\n（已中断本次回复）")
 

@@ -89,6 +89,34 @@ class ChatTurnTest(unittest.TestCase):
             agent.chat_turn(client, history, "hi", write=lambda _: None)
         self.assertEqual(history, [])
 
+    def test_keyboard_interrupt_rolls_back_user_message(self):
+        client = FakeClient(
+            FakeStream(["半"], final_message(), error=KeyboardInterrupt())
+        )
+        history = []
+
+        with self.assertRaises(KeyboardInterrupt):
+            agent.chat_turn(client, history, "hi", write=lambda _: None)
+        self.assertEqual(history, [])
+
+    def test_empty_content_leaves_history_unchanged(self):
+        empty = SimpleNamespace(stop_reason="max_tokens", content=[])
+        client = FakeClient(FakeStream([], empty))
+        history = []
+
+        message = agent.chat_turn(client, history, "hi", write=lambda _: None)
+
+        self.assertIs(message, empty)
+        self.assertEqual(history, [])
+
+    def test_max_tokens_with_content_is_kept(self):
+        client = FakeClient(FakeStream(["x"], final_message("max_tokens")))
+        history = []
+
+        agent.chat_turn(client, history, "hi", write=lambda _: None)
+
+        self.assertEqual(len(history), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
